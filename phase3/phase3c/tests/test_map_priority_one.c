@@ -1,0 +1,149 @@
+/*
+ * test_map.c
+ *  
+ *  Tests the P3FrameMap and P3FrameUnmap functions. P3SwapIn uses these functions to fill the page
+ *  with its page number.
+ *
+ */
+#include <usyscall.h>
+#include <libuser.h>
+#include <assert.h>
+#include <usloss.h>
+#include <stdlib.h>
+#include <phase3.h>
+#include <stdarg.h>
+#include <unistd.h>
+#include "phase2.h"
+#include "tester.h"
+#include "phase3Int.h"
+
+#define PAGES 4    // # of pages
+#define FRAMES 140 // # of frames
+#define PAGERS 3   // # of pagers
+#define DEBUG
+static char *vmRegion;
+static int pageSize;
+static int child_index;
+static int passed = FALSE;
+static int tester[35];
+#define DEBUG
+#ifdef DEBUG
+int debugging = 1;
+#else
+int debugging = 0;
+#endif /* DEBUG */
+
+static void
+Debug(char *fmt, ...)
+{
+    va_list ap;
+
+    if (debugging)
+    {
+        va_start(ap, fmt);
+        USLOSS_VConsole(fmt, ap);
+    }
+}
+
+static int
+Child(void *arg)
+{
+
+    int index = (int)arg;
+    child_index = index;
+    int j;
+    char *page;
+    int pid;
+    child_index = 0;
+    Sys_GetPID(&pid);
+    Debug("Child (%d) starting.\n", pid);
+
+    // Pages should be filled with their page numbers.
+    for (j = 0; j < PAGES; j++)
+    {
+        page = vmRegion + j * pageSize;
+        Debug("Child %d reading from page %d @ %p\n", pid, j, page);
+        for (int k = 0; k < pageSize; k++)
+        {
+            assert(page[k] == j + tester[index]);
+        }
+    }
+    Debug("Child done.\n");
+    return 0;
+}
+
+int P4_Startup(void *arg)
+{
+    for (int i = 0; i < 35; i++)
+    {
+        tester[i] = 0;
+    }
+    int rc;
+    int pid;
+    int status;
+
+    Debug("P4_Startup starting.\n");
+    rc = Sys_VmInit(PAGES, PAGES, FRAMES, PAGERS, (void **)&vmRegion);
+    assert(rc == P1_SUCCESS);
+
+    pageSize = USLOSS_MmuPageSize();
+     char buffer[P1_MAXNAME + 1];
+     
+    for (int i = 0; i < 35; i++)
+    {
+        sprintf(buffer, "child_%d", i);
+        rc = Sys_Spawn(buffer, Child, (void *)i, USLOSS_MIN_STACK * 4, 1, &pid);
+        assert(rc == P1_SUCCESS);
+    }
+    for (int i = 0; i < 35; i++)
+    {
+        rc = Sys_Wait(&pid, &status);
+        assert(rc == P1_SUCCESS);
+        assert(status == 0);
+    }
+    Debug("Child terminated\n");
+    Sys_VmShutdown();
+    PASSED();
+    return 0;
+}
+
+void test_setup(int argc, char **argv)
+{
+}
+
+void test_cleanup(int argc, char **argv)
+{
+    if (passed)
+    {
+        USLOSS_Console("TEST PASSED.\n");
+    }
+}
+
+    // Phase 3d stubs
+
+#include "phase3Int.h"
+
+int P3SwapInit(int pages, int frames)
+{
+    return P1_SUCCESS;
+}
+int P3SwapShutdown(void) { return P1_SUCCESS; }
+int P3SwapFreeAll(PID pid) { return P1_SUCCESS; }
+int P3SwapOut(int *frame) { return P1_SUCCESS; }
+int P3SwapIn(PID pid, int page, int frame)
+{
+    int rc = 0;
+    void *addr;
+    Debug("P3SwapIn PID %d page %d frame %d\n", pid, page, frame);
+    rc = P3FrameMap(frame, &addr);
+    assert(rc == P1_SUCCESS);
+
+    memset(addr, page + tester[child_index], pageSize);
+
+    rc = P3FrameUnmap(frame);
+    assert(rc == P1_SUCCESS);
+    rc = P2_Sleep(5);
+    Debug("weak up  in here\n");
+    assert(rc == P1_SUCCESS);
+    return P1_SUCCESS;
+}
